@@ -220,10 +220,13 @@ def render_text_skia(
     )
     if not layout_text.strip():
         log_message(
-            "All text characters unsupported by font, skipping render",
+            f"All text characters unsupported by font. Rendering failed: "
+            f"'{clean_text[:30]}'",
             always_print=True,
         )
-        return pil_image
+        raise RenderingError(
+            "All text characters unsupported by font (no supported glyphs)"
+        )
 
     try:
         _, regular_typeface, regular_hb_face = load_font_resources(

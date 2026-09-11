@@ -1486,6 +1486,17 @@ def create_layout(
                                     "when it improves readability."
                                 ),
                             )
+                            restore_original_on_render_failure = gr.Checkbox(
+                                value=saved_settings.get(
+                                    "restore_original_on_render_failure", True
+                                ),
+                                label="Restore Original Text on Render Failure",
+                                info=(
+                                    "Paste the original pre-cleanup page region back into a bubble "
+                                    "when its translated text cannot be rendered, so bubbles are "
+                                    "never left blank."
+                                ),
+                            )
                             vertical_line_spacing_mult = gr.Slider(
                                 0.5,
                                 2.0,
@@ -2498,6 +2509,7 @@ def create_layout(
             hyphenate_before_scaling,
             detach_trailing_punctuation,
             auto_vertical_text,
+            restore_original_on_render_failure,
             vertical_line_spacing_mult,
             vertical_font_size_mult,
             special_instructions,
@@ -2644,6 +2656,7 @@ def create_layout(
             hyphenate_before_scaling,
             detach_trailing_punctuation,
             auto_vertical_text,
+            restore_original_on_render_failure,
             vertical_line_spacing_mult,
             vertical_font_size_mult,
             hyphen_penalty,
@@ -2787,6 +2800,7 @@ def create_layout(
             hyphenate_before_scaling,
             detach_trailing_punctuation,
             auto_vertical_text,
+            restore_original_on_render_failure,
             vertical_line_spacing_mult,
             vertical_font_size_mult,
             hyphen_penalty,
@@ -2934,6 +2948,7 @@ def create_layout(
             hyphenate_before_scaling,
             detach_trailing_punctuation,
             auto_vertical_text,
+            restore_original_on_render_failure,
             vertical_line_spacing_mult,
             vertical_font_size_mult,
             hyphen_penalty,

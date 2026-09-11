@@ -219,6 +219,7 @@ DEFAULT_SETTINGS = {
     "auto_vertical_text": False,
     "vertical_line_spacing_mult": 1.0,
     "vertical_font_size_mult": 1.0,
+    "restore_original_on_render_failure": True,
     "font_pack": None,
     "verbose": False,
     "jpeg_quality": 95,
@@ -384,6 +385,7 @@ CANONICAL_CONFIG_KEY_ORDER: list[str] = [
     "auto_vertical_text",
     "vertical_line_spacing_mult",
     "vertical_font_size_mult",
+    "restore_original_on_render_failure",
     # Models / Detection
     "confidence",
     "conjoined_confidence",

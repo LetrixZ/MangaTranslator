@@ -418,6 +418,11 @@ def main():
         help="Min font size for rendering text (px)",
     )
     parser.add_argument(
+        "--no-restore-original-fallback",
+        action="store_true",
+        help="Disable restoring the original source text into a bubble when rendering fails (default: restore so bubbles are never left blank).",
+    )
+    parser.add_argument(
         "--line-spacing-mult",
         type=float,
         default=1.0,
@@ -1360,6 +1365,9 @@ def main():
             auto_vertical_text=args.auto_vertical_text,
             vertical_line_spacing_mult=args.vertical_line_spacing_mult,
             vertical_font_size_mult=args.vertical_font_size_mult,
+            restore_original_on_render_failure=(
+                not args.no_restore_original_fallback
+            ),
         ),
         output=OutputConfig(
             output_format=args.output_format,

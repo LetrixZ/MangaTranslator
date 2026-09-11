@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import math
@@ -635,6 +637,33 @@ def _apply_pre_upscale_if_needed(
     )
     upscaled = upscale_image(image, factor, model_type=model_type, verbose=verbose)
     return upscaled, factor
+
+
+def _restore_source_region(
+    target: Image.Image,
+    source: Image.Image,
+    bbox: tuple[int, int, int, int],
+    padding: int = 0,
+) -> Image.Image:
+    """Paste the original (pre-cleanup) page region back over a blank render.
+
+    Used when text cannot be laid out and no result should be left blank:
+    the source page still contains the original drawn text, so restoring it
+    keeps the bubble readable instead of empty.
+    """
+    x1, y1, x2, y2 = (int(round(v)) for v in bbox)
+    x1 = max(0, x1 - padding)
+    y1 = max(0, y1 - padding)
+    x2 = min(source.width, x2 + padding)
+    y2 = min(source.height, y2 + padding)
+    if x2 <= x1 or y2 <= y1:
+        return target
+    region = source.crop((x1, y1, x2, y2))
+    if region.mode != target.mode:
+        region = region.convert(target.mode)
+    result = target.copy()
+    result.paste(region, (x1, y1))
+    return result
 
 
 def translate_and_render(
@@ -1741,6 +1770,9 @@ def translate_and_render(
                                 if is_outside_text
                                 else config.rendering.vertical_font_size_mult
                             ),
+                            restore_original_on_render_failure=(
+                                config.rendering.restore_original_on_render_failure
+                            ),
                         )
                         success = False
                         if is_outside_text:
@@ -1898,6 +1930,20 @@ def translate_and_render(
                                         original_patch = bubble["original_crop_pil"]
                                         rendered_image.paste(
                                             original_patch, (bbox[0], bbox[1])
+                                        )
+                                        success = True
+                                    elif (
+                                        config.rendering.restore_original_on_render_failure
+                                    ):
+                                        log_message(
+                                            f"Restoring original OSB region for {bbox}",
+                                            verbose=verbose,
+                                            always_print=True,
+                                        )
+                                        rendered_image = _restore_source_region(
+                                            pil_cleaned_image,
+                                            full_page_context_source,
+                                            bbox,
                                         )
                                         success = True
                                     else:
@@ -2063,9 +2109,22 @@ def translate_and_render(
                             pil_cleaned_image = rendered_image
                             final_image_to_save = pil_cleaned_image
                         else:
-                            log_message(
-                                f"Failed to render bubble {bbox}", verbose=verbose
-                            )
+                            if config.rendering.restore_original_on_render_failure:
+                                log_message(
+                                    f"Failed to render bubble {bbox}; restoring original text",
+                                    verbose=verbose,
+                                )
+                                pil_cleaned_image = _restore_source_region(
+                                    pil_cleaned_image,
+                                    full_page_context_source,
+                                    bbox,
+                                )
+                                final_image_to_save = pil_cleaned_image
+                            else:
+                                log_message(
+                                    f"Failed to render bubble {bbox}",
+                                    verbose=verbose,
+                                )
                 else:
                     log_message(
                         f"Warning: Bubble/translation count mismatch "

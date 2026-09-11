@@ -126,6 +126,7 @@ class RenderingConfig:
     auto_vertical_text: bool = False
     vertical_line_spacing_mult: float = 1.0
     vertical_font_size_mult: float = 1.0
+    restore_original_on_render_failure: bool = True
 
 
 @dataclass

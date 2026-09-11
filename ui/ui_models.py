@@ -113,6 +113,7 @@ class UIRenderingSettings:
     auto_vertical_text: bool = False
     vertical_line_spacing_mult: float = 1.0
     vertical_font_size_mult: float = 1.0
+    restore_original_on_render_failure: bool = True
 
 
 @dataclass
@@ -319,6 +320,9 @@ class UIConfigState:
             "auto_vertical_text": self.rendering.auto_vertical_text,
             "vertical_line_spacing_mult": self.rendering.vertical_line_spacing_mult,
             "vertical_font_size_mult": self.rendering.vertical_font_size_mult,
+            "restore_original_on_render_failure": (
+                self.rendering.restore_original_on_render_failure
+            ),
             "outside_text_enabled": self.outside_text.enabled,
             "outside_text_seed": self.outside_text.seed,
             "outside_text_huggingface_token": self.outside_text.huggingface_token,
@@ -708,6 +712,12 @@ class UIConfigState:
                     "auto_vertical_text",
                     defaults.get("auto_vertical_text", False),
                 ),
+                restore_original_on_render_failure=bool(
+                    data.get(
+                        "restore_original_on_render_failure",
+                        defaults.get("restore_original_on_render_failure", True),
+                    )
+                ),
                 vertical_line_spacing_mult=data.get("vertical_line_spacing_mult", 1.0),
                 vertical_font_size_mult=data.get("vertical_font_size_mult", 1.0),
             ),
@@ -930,6 +940,9 @@ def map_ui_to_backend_config(
         auto_vertical_text=ui_state.rendering.auto_vertical_text,
         vertical_line_spacing_mult=ui_state.rendering.vertical_line_spacing_mult,
         vertical_font_size_mult=ui_state.rendering.vertical_font_size_mult,
+        restore_original_on_render_failure=(
+            ui_state.rendering.restore_original_on_render_failure
+        ),
     )
 
     upscale_mode = ui_state.output.image_upscale_mode

@@ -169,6 +169,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         hyphenate_before_scaling_val,
         detach_trailing_punctuation_val,
         auto_vertical_text_val,
+        restore_original_on_render_failure_val,
         vertical_line_spacing_mult_val,
         vertical_font_size_mult_val,
         hyphen_penalty_val,
@@ -389,6 +390,9 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             hyphenate_before_scaling=hyphenate_before_scaling_val,
             detach_trailing_punctuation=detach_trailing_punctuation_val,
             auto_vertical_text=auto_vertical_text_val,
+            restore_original_on_render_failure=bool(
+                restore_original_on_render_failure_val
+            ),
             vertical_line_spacing_mult=float(vertical_line_spacing_mult_val),
             vertical_font_size_mult=float(vertical_font_size_mult_val),
             hyphen_penalty=hyphen_penalty_val,
@@ -714,7 +718,7 @@ def _format_batch_success_message(
         else:
             llm_params_str += f", Top-K={top_k_val}"
     elif provider == "OpenAI-Compatible":
-        param_notes = " (Top-K N/A)"
+        llm_params_str += f", Top-K={top_k_val}"
     llm_params_str += param_notes
 
     failure_details = ""
@@ -1176,6 +1180,7 @@ def handle_save_config_click(*args: Any) -> str:
         hyphenate_before_scaling_val,
         detach_trailing_punctuation_val,
         auto_vertical_text_val,
+        restore_original_on_render_failure_val,
         vertical_line_spacing_mult_val,
         vertical_font_size_mult_val,
         special_instructions_val,
@@ -1379,6 +1384,9 @@ def handle_save_config_click(*args: Any) -> str:
             hyphenate_before_scaling=hyphenate_before_scaling_val,
             detach_trailing_punctuation=detach_trailing_punctuation_val,
             auto_vertical_text=auto_vertical_text_val,
+            restore_original_on_render_failure=bool(
+                restore_original_on_render_failure_val
+            ),
             vertical_line_spacing_mult=float(vertical_line_spacing_mult_val),
             vertical_font_size_mult=float(vertical_font_size_mult_val),
             hyphen_penalty=hyphen_penalty_val,

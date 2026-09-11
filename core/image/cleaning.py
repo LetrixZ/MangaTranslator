@@ -20,7 +20,7 @@ from utils.logging import log_message
 
 from .detection import detect_speech_bubbles
 from .image_utils import pil_to_cv2
-from .inpainting import FluxKleinInpainter, FluxKontextInpainter
+from .inpainting import FluxKleinInpainter, FluxKontextInpainter, LamaInpainter
 
 # Cleaning parameters
 GRAYSCALE_MIDPOINT = 128  # Threshold for determining black vs white bubbles
@@ -860,7 +860,7 @@ def clean_speech_bubbles(
             ]
             if colored_bubbles:
                 log_message(
-                    f"Inpainting {len(colored_bubbles)} colored bubbles with Flux",
+                    f"Inpainting {len(colored_bubbles)} colored bubbles with {inpaint_method}",
                     always_print=True,
                 )
                 pil_working = Image.fromarray(
@@ -905,6 +905,8 @@ def clean_speech_bubbles(
                             sdcpp_text_encoder_quant=flux_sdcpp_text_encoder_quant,
                             verbose=verbose,
                         )
+                    elif inpaint_method == "lama":
+                        inpainter = LamaInpainter(device=device, verbose=verbose)
                     else:
                         # Default to Flux Kontext
                         low_vram = flux_low_vram if flux_backend == "sdnq" else False

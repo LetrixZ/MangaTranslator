@@ -21,7 +21,11 @@ from core.batch_coordinator import (
 )
 from core.config import MangaTranslatorConfig
 from core.image.image_utils import cv2_to_pil, pil_to_cv2, process_bubble_image_cached
-from core.image.inpainting import FluxKleinInpainter, FluxKontextInpainter
+from core.image.inpainting import (
+    FluxKleinInpainter,
+    FluxKontextInpainter,
+    LamaInpainter,
+)
 from core.image.ocr_detection import OutsideTextDetector, extract_text_with_manga_ocr
 from core.image.tilt_detection import (
     compute_effective_tilt_angle,
@@ -874,7 +878,10 @@ def finish_outside_text_work(
                     verbose=verbose,
                 )
 
-        if inpainting_method == "none":
+        if inpainting_method == "lama":
+            inpainter = LamaInpainter(device=config.device, verbose=verbose)
+            log_message("Using LaMa (torch) for inpainting", verbose=verbose)
+        elif inpainting_method == "none":
             inpainter = None
             log_message(
                 "Using text background mode (no inpainting for non-solid regions)",

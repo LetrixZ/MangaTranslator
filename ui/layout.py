@@ -1720,6 +1720,7 @@ def create_layout(
                                         "flux_klein_4b",
                                     ),
                                     choices=[
+                                        ("LaMa", "lama"),
                                         ("Flux.2 Klein 9B", "flux_klein_9b"),
                                         ("Flux.2 Klein 4B", "flux_klein_4b"),
                                         ("Flux.1 Kontext (12B)", "flux_kontext"),
@@ -1728,19 +1729,25 @@ def create_layout(
                                     ],
                                     label="Inpainting Method",
                                     info=(
-                                        "Klein models are newer, but may introduce minor color "
-                                        "shifts. Kontext does not shift colors, but is more dated."
+                                        "LaMa is a lightweight GAN: much faster than Flux with good "
+                                        "results on flat/textured backgrounds. Flux Klein/Kontext are "
+                                        "diffusion models: slower but stronger on complex art."
                                     ),
                                 )
                                 _initial_method = saved_settings.get(
                                     "outside_text_inpainting_method", "flux_klein_4b"
                                 )
+                                _is_lama = _initial_method == "lama"
                                 _is_kontext = _initial_method == "flux_kontext"
                                 _is_klein_model = _initial_method in (
                                     "flux_klein_9b",
                                     "flux_klein_4b",
                                 )
                                 _backend_visible = _is_klein_model or _is_kontext
+                                _has_model_inpainter = _initial_method not in (
+                                    "opencv",
+                                    "none",
+                                )
                                 _initial_backend = flux_valid_backend(
                                     _initial_method,
                                     saved_settings.get(
@@ -1904,7 +1911,7 @@ def create_layout(
                                         "outside_text_inpainting_method",
                                         "flux_klein_4b",
                                     )
-                                    not in ("opencv", "none"),
+                                    not in ("opencv", "none", "lama"),
                                 )
                                 _is_klein_for_lum = saved_settings.get(
                                     "outside_text_inpainting_method",
@@ -1913,7 +1920,7 @@ def create_layout(
                                 _is_flux_for_klein_options = saved_settings.get(
                                     "outside_text_inpainting_method",
                                     "flux_klein_4b",
-                                ) not in ("opencv", "none")
+                                ) in ("flux_klein_9b", "flux_klein_4b", "flux_kontext")
                                 _upscale_small_crops_enabled = saved_settings.get(
                                     "outside_text_flux_upscale_small_crops", True
                                 )
@@ -1975,7 +1982,7 @@ def create_layout(
                                         "outside_text_inpainting_method",
                                         "flux_klein_4b",
                                     )
-                                    not in ("opencv", "none"),
+                                    not in ("opencv", "none", "lama"),
                                 )
                                 outside_text_seed = gr.Number(
                                     value=saved_settings.get("outside_text_seed", 1),
@@ -1987,18 +1994,19 @@ def create_layout(
                                         "outside_text_inpainting_method",
                                         "flux_klein_4b",
                                     )
-                                    not in ("opencv", "none"),
+                                    not in ("opencv", "none", "lama"),
                                 )
                                 inpaint_colored_bubbles = gr.Checkbox(
                                     value=saved_settings.get(
                                         "inpaint_colored_bubbles", False
                                     ),
-                                    label="Use Flux to Inpaint Colored Bubbles",
+                                    label="Use Inpainting Model for Colored Bubbles",
                                     info=(
-                                        "Use Flux for bubble cleaning when the interior is not pure white/black "
+                                        "Use the selected inpainting model (LaMa or Flux) for bubble "
+                                        "cleaning when the interior is not pure white/black "
                                         "(e.g., colored/grayscale)."
                                     ),
-                                    visible=_backend_visible,
+                                    visible=_has_model_inpainter,
                                     interactive=saved_settings.get(
                                         "outside_text_inpainting_method",
                                         "flux_klein_4b",
@@ -3343,6 +3351,8 @@ def create_layout(
             is_opencv = method == "opencv"
             is_none = method == "none"
             is_no_flux = is_opencv or is_none
+            is_lama = method == "lama"
+            is_flux = not is_no_flux and not is_lama
             is_kontext = method == "flux_kontext"
             is_klein = method in ("flux_klein_9b", "flux_klein_4b")
 
@@ -3409,21 +3419,21 @@ def create_layout(
                 ),
                 text_encoder_quant_value,
                 gr.update(
-                    visible=(not is_no_flux),
-                    interactive=(not is_no_flux),
+                    visible=is_flux,
+                    interactive=is_flux,
                     maximum=max_steps,
                     value=default_steps,
                 ),
                 luminance_update,
-                gr.update(visible=(not is_no_flux), interactive=is_klein),
-                gr.update(visible=(not is_no_flux), interactive=(not is_no_flux)),
+                gr.update(visible=is_flux, interactive=is_klein),
+                gr.update(visible=is_flux, interactive=is_flux),
                 gr.update(
                     visible=residual_interactive,
                     interactive=residual_interactive,
                 ),
                 gr.update(
-                    visible=(not is_no_flux),
-                    interactive=(not is_no_flux),
+                    visible=is_flux,
+                    interactive=is_flux,
                 ),
                 gr.update(
                     visible=(not is_no_flux),

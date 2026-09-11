@@ -52,6 +52,7 @@ class ModelType(Enum):
     FLUX_KLEIN_SDCPP_VAE = "flux_klein_sdcpp_vae"
     FLUX_KONTEXT_SDCPP_CLIP_L = "flux_kontext_sdcpp_clip_l"
     FLUX_KONTEXT_SDCPP_VAE = "flux_kontext_sdcpp_vae"
+    LAMA = "lama"
 
 
 class ModelManager:
@@ -142,6 +143,7 @@ class ModelManager:
             ModelType.FLUX_KONTEXT_SDCPP_VAE: (
                 flux_kontext_sdcpp_dir / "ae.safetensors"
             ),
+            ModelType.LAMA: (model_dir / "lama" / "anime-manga-big-lama.pt"),
         }
 
     def _init_model_urls(self):
@@ -167,6 +169,7 @@ class ModelManager:
                 "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/"
                 "split_files/vae/ae.safetensors"
             ),
+            ModelType.LAMA: "https://github.com/Sanster/models/releases/download/AnimeMangaInpainting/anime-manga-big-lama.pt",
         }
 
     def _init_hf_repos(self):
@@ -1389,6 +1392,39 @@ class ModelManager:
         return self._load_flux_klein(
             ModelType.FLUX_KLEIN_4B_PIPELINE, "4b", low_vram=low_vram, verbose=verbose
         )
+
+    def load_lama(self, device: torch.device | None = None, verbose: bool = False):
+        """Load the LaMa (anime-manga-big-lama) inpainting TorchScript model.
+
+        Args:
+            device: Optional torch device to run the model on. Non-CUDA
+                    accelerators (e.g. MPS) are skipped for JIT safety and the
+                    model runs on CPU with float32.
+            verbose: Whether to print verbose logging
+
+        Returns:
+            torch.jit.ScriptModule: The loaded LaMa module.
+        """
+        with self._lock:
+            if self.is_loaded(ModelType.LAMA):
+                return self.models[ModelType.LAMA]
+
+            path = self.model_paths[ModelType.LAMA]
+            self._ensure_file(path, self.model_urls[ModelType.LAMA], verbose=verbose)
+            log_message("Loading LaMa inpainting model...", always_print=True)
+            model = torch.jit.load(str(path), map_location="cpu")
+            model.eval()
+            # JIT-traced FFT models are not reliably portable to MPS; LaMa is
+            # small enough that CPU float32 tiles are fast in practice.
+            if device is not None and device.type == "cuda":
+                model = model.to(device)
+            self.models[ModelType.LAMA] = model
+            log_message("LaMa inpainting model loaded.", always_print=True)
+            return model
+
+    def unload_lama(self, verbose: bool = False):
+        """Unload the LaMa inpainting model to free memory."""
+        self.unload_model(ModelType.LAMA, verbose=verbose)
 
     def unload_model(
         self, model_type: ModelType, force_gc: bool = True, verbose: bool = False

@@ -1674,3 +1674,258 @@ class FluxKleinInpainter:
             self.cache.set_inpainted_image(cache_key, patch_pil)
 
         return composited_pil
+
+
+class LamaInpainter:
+    """LaMa (anime-manga-big-lama) lightweight inpainting network.
+
+    Wraps the Sanster `anime-manga-big-lama.pt` TorchScript module:
+    uniform mask components are filled with the surrounding median
+    color (no model call), and the rest is split into bounded tiles with a
+    small context margin so each inference is tiny and seams never composite.
+    Mirrors the ``inpaint_mask`` interface used by the Flux inpainter so the
+    OSB and colored-bubble paths can swap implementations freely.
+    """
+
+    TILE_SIZE = 512
+    TILE_CONTEXT = 128
+    # Model input must be a multiple of this (traced with pad-to-multiple-8).
+    PAD_MULTIPLE = 8
+    # A mask component is treated as uniform when every channel's background
+    # standard deviation stays under this in a patch around it.
+    UNIFORM_STD_THRESHOLD = 12.0
+
+    def __init__(self, device: torch.device | None = None, verbose: bool = False):
+        self.verbose = verbose
+        self.manager = get_model_manager()
+        self.model = None
+        self.model_device = None
+        target = device if device is not None else get_best_device()
+        self.model_device = target if target.type == "cuda" else torch.device("cpu")
+
+    def load_models(self):
+        """Load LaMa via the model manager (downloads weights on first use)."""
+        if self.model is None:
+            self.model = self.manager.load_lama(
+                device=self.model_device, verbose=self.verbose
+            )
+
+    def unload_models(self):
+        """Unload LaMa to free memory."""
+        self.model = None
+        self.manager.unload_lama(verbose=self.verbose)
+
+    def inpaint_mask(
+        self,
+        image_pil: Image.Image,
+        mask_np: np.ndarray,
+        seed: int = 1,
+        verbose: bool = False,
+        ocr_params: dict | None = None,
+        strict_mask_clipping: bool = False,
+        composite_clip_bbox: tuple[int, int, int, int] | None = None,
+    ) -> Image.Image:
+        """Inpaint the masked area(s) of a full-page PIL image.
+
+        Args:
+            image_pil: PIL image to inpaint.
+            mask_np: (H, W) boolean numpy mask, True = pixels to generate.
+            seed: Accepted for interface parity; LaMa is deterministic.
+            ocr_params: Accepted for interface parity (cache keying).
+            strict_mask_clipping: Accepted for interface parity.
+            composite_clip_bbox: Accepted for interface parity; compositing is
+                already strictly limited to masked component pixels.
+
+        Returns:
+            PIL.Image: The inpainted image, identical outside the mask.
+        """
+        mask = np.asarray(mask_np)
+        if mask.dtype != bool:
+            mask = mask.astype(bool)
+        if not mask.any():
+            return image_pil
+
+        self.load_models()
+        rgb = np.asarray(image_pil.convert("RGB"), dtype=np.uint8)
+        output = rgb.copy()
+        pending = mask.copy()
+
+        # 1) Uniform components: fill with surrounding median color, no model.
+        labels, count = _lama_mask_components(pending)
+        for label in range(1, count + 1):
+            component = labels == label
+            color = _lama_uniform_component_color(rgb, pending, component)
+            if color is not None:
+                output[component] = color
+                pending[component] = False
+
+        # 2) Everything else: bounded model tiles, composited core-only.
+        if pending.any():
+            for tile in _lama_inpaint_tiles(pending):
+                left, top, right, bottom = tile["crop"]
+                crop = output[top:bottom, left:right]
+                crop_mask = pending[top:bottom, left:right]
+                filled = self._infer(crop, crop_mask)
+                core = tile["core"]
+                cl, ct, cr, cb = core
+                where = pending[ct:cb, cl:cr]
+                if not where.any():
+                    continue
+                # filled is aligned with the crop; core-local composite.
+                output[ct:cb, cl:cr][where] = filled[
+                    ct - top : cb - top, cl - left : cr - left
+                ][where]
+                pending[ct:cb, cl:cr][where] = False
+
+        return Image.fromarray(output)
+
+    def _infer(self, crop_rgb: np.ndarray, crop_mask: np.ndarray) -> np.ndarray:
+        """Run LaMa on one padded crop; returns RGB uint8 at crop size."""
+        h, w = crop_rgb.shape[:2]
+        img = torch.from_numpy(crop_rgb.astype(np.float32) / 255.0).permute(2, 0, 1)
+        msk = torch.from_numpy(crop_mask.astype(np.float32)).unsqueeze(0)
+        pad_h = (self.PAD_MULTIPLE - h % self.PAD_MULTIPLE) % self.PAD_MULTIPLE
+        pad_w = (self.PAD_MULTIPLE - w % self.PAD_MULTIPLE) % self.PAD_MULTIPLE
+        if pad_h or pad_w:
+            img = torch.nn.functional.pad(img, (0, pad_w, 0, pad_h))
+            msk = torch.nn.functional.pad(msk, (0, pad_w, 0, pad_h))
+        img = img.unsqueeze(0)
+        msk = msk.unsqueeze(0)
+        device = self.model_device
+        with torch.no_grad():
+            generated = self.model(img.to(device), msk.to(device))
+        if device.type != "cpu":
+            generated = generated.cpu()
+        generated = generated[0].clamp(0.0, 1.0).permute(1, 2, 0).numpy()
+        generated = (generated * 255.0).astype(np.uint8)
+        return generated[:h, :w]
+
+
+def _lama_mask_components(mask: np.ndarray) -> tuple[np.ndarray, int]:
+    """Label connected components of a boolean mask (8-connectivity)."""
+    from scipy import ndimage
+
+    structure = np.ones((3, 3), dtype=bool)
+    labels, count = ndimage.label(mask, structure=structure)
+    return labels, count
+
+
+def _lama_uniform_component_color(
+    image: np.ndarray, mask: np.ndarray, component: np.ndarray
+) -> tuple[int, int, int] | None:
+    """Median background color of a component if its surroundings are uniform.
+
+    Samples the non-masked ring inside and around the component's bounding
+    box. Returns None when the background is textured/noisy, in which case the
+    caller should run the model instead.
+    """
+    ys, xs = np.where(component)
+    if len(xs) == 0:
+        return None
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    margin = 16
+    px0 = max(0, x0 - margin)
+    py0 = max(0, y0 - margin)
+    px1 = min(image.shape[1], x1 + margin)
+    py1 = min(image.shape[0], y1 + margin)
+
+    patch_mask = ~mask[py0:py1, px0:px1]
+    if patch_mask.sum() < 64:
+        return None
+    patch = image[py0:py1, px0:px1][patch_mask].astype(np.float32)
+    if patch.shape[0] < 64:
+        return None
+    medians = np.median(patch, axis=0)
+    deviations = patch - medians
+    max_std = float(np.abs(deviations).mean(axis=0).max())
+    if max_std > LamaInpainter.UNIFORM_STD_THRESHOLD:
+        return None
+    return tuple(int(round(c)) for c in medians)
+
+
+def _lama_inpaint_tiles(mask: np.ndarray) -> list[dict]:
+    """Pack connected mask components into bounded inference tiles.
+
+    Components no larger than ``TILE_SIZE`` are greedily merged while their
+    union stays inside one tile; larger components are sliced into fixed-size
+    core tiles. Each tile carries ``crop`` (core + context margin) and ``core``
+    bounds. Only core pixels inside the mask are composited afterwards.
+    """
+    labels, count = _lama_mask_components(mask)
+    bounds = {}
+    for value in range(1, count + 1):
+        ys, xs = np.where(labels == value)
+        if len(xs) == 0:
+            continue
+        bounds[value] = (
+            int(xs.min()),
+            int(ys.min()),
+            int(xs.max()) + 1,
+            int(ys.max()) + 1,
+        )
+    mask_h, mask_w = mask.shape
+    tiles = []
+
+    def expand(core):
+        left, top, right, bottom = core
+        c = LamaInpainter.TILE_CONTEXT
+        return (
+            max(0, left - c),
+            max(0, top - c),
+            min(mask_w, right + c),
+            min(mask_h, bottom + c),
+        )
+
+    for component, (left, top, right, bottom) in bounds.items():
+        width = right - left
+        height = bottom - top
+        size = LamaInpainter.TILE_SIZE
+        if width <= size and height <= size:
+            placed = False
+            for tile in tiles:
+                best = [
+                    min(tile["core"][0], left),
+                    min(tile["core"][1], top),
+                    max(tile["core"][2], right),
+                    max(tile["core"][3], bottom),
+                ]
+                if (
+                    best[2] - best[0] <= size
+                    and best[3] - best[1] <= size
+                ):
+                    tile["core"] = best
+                    tile["crop"] = expand(best)
+                    tile["components"].append(component)
+                    placed = True
+                    break
+            if not placed:
+                core = (left, top, right, bottom)
+                tiles.append(
+                    {
+                        "components": [component],
+                        "core": core,
+                        "crop": expand(core),
+                    }
+                )
+            continue
+
+        # Oversized component: slice into fixed-size core tiles.
+        core_top = top
+        while core_top < bottom:
+            core_bottom = min(core_top + size, bottom)
+            core_left = left
+            while core_left < right:
+                core_right = min(core_left + size, right)
+                core = (core_left, core_top, core_right, core_bottom)
+                tiles.append(
+                    {
+                        "components": [component],
+                        "core": core,
+                        "crop": expand(core),
+                    }
+                )
+                core_left = core_right
+            core_top = core_bottom
+
+    return tiles

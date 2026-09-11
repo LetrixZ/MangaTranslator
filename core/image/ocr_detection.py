@@ -7,6 +7,7 @@ from PIL import Image
 
 from core.caching import get_cache
 from core.device import get_best_device
+from core.image.detection import _clamp_bbox_to_image
 from core.ml.model_manager import ModelType, get_model_manager
 from utils.exceptions import ImageProcessingError
 from utils.logging import log_message
@@ -476,6 +477,21 @@ class OutsideTextDetector:
                 base_results.append((box, float(conf)))
 
         final_results = list(base_results)
+
+        # Clamp raw detector boxes to the image bounds and drop degenerate
+        # (zero/negative-area) boxes. RT-DETR/YOLO can emit slightly
+        # out-of-range or collapsed floats (e.g. -0.6 at image borders);
+        # int() truncation downstream would otherwise turn them into empty
+        # numpy crops that crash cv2.cvtColor (!_src.empty()).
+        img_w, img_h = image_pil.width, image_pil.height
+        sanitized_results = []
+        for box, conf in final_results:
+            x0, y0, x1, y1 = _clamp_bbox_to_image(
+                float(box[0]), float(box[1]), float(box[2]), float(box[3]), img_w, img_h
+            )
+            if x1 > x0 and y1 > y0:
+                sanitized_results.append(([x0, y0, x1, y1], float(conf)))
+        final_results = sanitized_results
 
         log_message("Filtering out nested detections...", verbose=verbose)
         before_nested_filter = len(final_results)

@@ -1455,7 +1455,11 @@ def detect_speech_bubbles(
                     _, secondary_idx = secondary_sources[i]
                     cls_id = int(secondary_cls[secondary_idx])
                     if text_free_id is not None and cls_id == text_free_id:
-                        text_free_boxes.append(s_box.tolist())
+                        text_free_boxes.append(
+                            _clamp_bbox_to_image(
+                                *s_box.tolist(), image_pil.width, image_pil.height
+                            )
+                        )
                         continue
                     if bubble_id is None or cls_id == bubble_id:
                         filtered_boxes.append(s_box)

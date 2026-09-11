@@ -5,6 +5,7 @@ import os
 import random
 import re
 import tempfile
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -87,8 +88,22 @@ def _build_outside_text_data(
         raw_coords, _ = raw_res
 
         x1, y1, x2, y2 = [int(c) for c in bbox_coords]
-        bbox_tuple = (x1, y1, x2, y2)
         raw_bbox_tuple = tuple(int(c) for c in raw_coords)
+
+        # Defensive clamp: a collapsed/out-of-range expanded box must never
+        # produce an empty numpy crop (cv2.cvtColor !_src.empty() crash in
+        # cv2_to_pil / pil_to_cv2 / tilt detection). Keep entries 1:1 with
+        # outside_text_results since downstream indexes align by position.
+        img_w, img_h = pil_image.size
+        x1 = max(0, min(img_w, x1))
+        y1 = max(0, min(img_h, y1))
+        x2 = max(0, min(img_w, x2))
+        y2 = max(0, min(img_h, y2))
+        if x2 <= x1:
+            x2 = min(img_w, x1 + 1)
+        if y2 <= y1:
+            y2 = min(img_h, y1 + 1)
+        bbox_tuple = (x1, y1, x2, y2)
 
         outside_text_image_cv = original_cv_image[y1:y2, x1:x2].copy()
         outside_text_image_pil = cv2_to_pil(outside_text_image_cv)
@@ -420,9 +435,17 @@ def prepare_outside_text_work(
                     expansion_mult = max(expansion_mult, tiny_expansion_mult)
 
                 if expansion_mult <= 1.0:
-                    expanded_results.append(
-                        ([int(x1), int(y1), int(x2), int(y2)], conf)
-                    )
+                    eb = [
+                        max(0, int(x1)),
+                        max(0, int(y1)),
+                        min(img_w, int(x2)),
+                        min(img_h, int(y2)),
+                    ]
+                    if eb[2] <= eb[0]:
+                        eb[2] = min(img_w, eb[0] + 1)
+                    if eb[3] <= eb[1]:
+                        eb[3] = min(img_h, eb[1] + 1)
+                    expanded_results.append((eb, conf))
                     continue
 
                 cx = x1 + w / 2
@@ -524,7 +547,23 @@ def prepare_outside_text_work(
                 nx2 = max(nx2, int(x2))
                 ny2 = max(ny2, int(y2))
 
-                expanded_results.append(([nx1, ny1, nx2, ny2], conf))
+                if nx2 > nx1 and ny2 > ny1:
+                    expanded_results.append(([nx1, ny1, nx2, ny2], conf))
+                else:
+                    # Expansion/retraction collapsed the box; fall back to the
+                    # (sanitized, valid) raw box so downstream crops never slice
+                    # an empty region (cv2.cvtColor !_src.empty() crash).
+                    rb = [
+                        max(0, int(x1)),
+                        max(0, int(y1)),
+                        min(img_w, int(x2)),
+                        min(img_h, int(y2)),
+                    ]
+                    if rb[2] <= rb[0]:
+                        rb[2] = min(img_w, rb[0] + 1)
+                    if rb[3] <= rb[1]:
+                        rb[3] = min(img_h, rb[1] + 1)
+                    expanded_results.append((rb, conf))
 
             outside_text_results = expanded_results
 
@@ -578,6 +617,11 @@ def prepare_outside_text_work(
             bbox_coords, conf = ocr_result
             x1, y1, x2, y2 = [int(c) for c in bbox_coords]
             bbox_tuple = (x1, y1, x2, y2)
+            if x2 <= x1 or y2 <= y1:
+                # Degenerate box: PIL crop would be empty (and KMeans would get
+                # zero samples). Skip color probing; downstream uses .get() with
+                # a safe default for missing keys.
+                continue
 
             bbox_area_img = pil_image.crop((x1, y1, x2, y2))
             bbox_array = np.array(bbox_area_img)
@@ -661,7 +705,8 @@ def prepare_outside_text_work(
 
     except Exception as e:
         log_message(
-            f"Error during outside text detection: {e}",
+            f"Error during outside text detection: {e}\n"
+            + traceback.format_exc(),
             always_print=True,
         )
         return None

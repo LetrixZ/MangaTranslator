@@ -97,6 +97,9 @@ class TranslationConfig:
     ero_doujinshi_mode: bool = False
     ocr_correction: bool = False
     force_cache_translations: bool = False
+    use_json_schema: bool = (
+        False  # OpenAI-Compatible only: constrain output to a JSON schema and use a compact prompt
+    )
     ocr_method: str = "LLM"  # "LLM", "manga-ocr", or "paddleocr-vl-1.6"
     request_coordinator: Any | None = None
 

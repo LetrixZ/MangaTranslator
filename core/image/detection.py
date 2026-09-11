@@ -87,6 +87,23 @@ def _mask_to_bbox(mask, fallback_box=None) -> tuple[int, int, int, int]:
     )
 
 
+def _clamp_bbox_to_image(
+    x0, y0, x1, y1, img_w: int, img_h: int
+) -> tuple[int, int, int, int]:
+    """Round float xyxy box coords to ints, clamped inside the image bounds.
+
+    Detector boxes (notably RT-DETR conjoined children at image borders) can
+    carry slightly out-of-range floats (e.g. -0.6). round() alone would turn
+    those into -1, which later becomes an empty numpy crop and crashes OpenCV
+    conversions downstream.
+    """
+    x0 = max(0, min(int(round(x0)), img_w))
+    y0 = max(0, min(int(round(y0)), img_h))
+    x1 = max(0, min(int(round(x1)), img_w))
+    y1 = max(0, min(int(round(y1)), img_h))
+    return x0, y0, x1, y1
+
+
 def _text_box_meaningfully_matches_box(t_box, b_box) -> bool:
     """Return True when a text box meaningfully belongs to a bubble box."""
     intersection = _box_intersection_area(t_box, b_box)
@@ -1117,12 +1134,7 @@ def _build_segmentation_detections(
         x0_f, y0_f, x1_f, y1_f = box.tolist()
         detections.append(
             {
-                "bbox": (
-                    round(x0_f),
-                    round(y0_f),
-                    round(x1_f),
-                    round(y1_f),
-                ),
+                "bbox": _clamp_bbox_to_image(x0_f, y0_f, x1_f, y1_f, img_w, img_h),
                 "confidence": conf,
                 "class": cls_name,
                 "sam_mask": sam_mask,
@@ -1178,7 +1190,9 @@ def _build_segmentation_detections(
         group_bboxes = []
         for b in group_boxes:
             bx0, by0, bx1, by1 = b.tolist() if hasattr(b, "tolist") else b
-            group_bboxes.append((round(bx0), round(by0), round(bx1), round(by1)))
+            group_bboxes.append(
+                _clamp_bbox_to_image(bx0, by0, bx1, by1, img_w, img_h)
+            )
 
         for local_idx, s_idx in enumerate(s_indices):
             source, orig_idx = secondary_sources[s_idx]
@@ -1229,7 +1243,9 @@ def _build_segmentation_detections(
         group_bboxes = []
         for b in group_boxes:
             bx0, by0, bx1, by1 = b.tolist() if hasattr(b, "tolist") else b
-            group_bboxes.append((round(bx0), round(by0), round(bx1), round(by1)))
+            group_bboxes.append(
+                _clamp_bbox_to_image(bx0, by0, bx1, by1, img_w, img_h)
+            )
 
         for local_idx, p_idx in enumerate(member_indices):
             source, orig_idx = primary_sources[p_idx]
@@ -1537,7 +1553,7 @@ def detect_speech_bubbles(
             log_message(
                 f"Warning: Could not load/run secondary RT-DETR model: {e}. "
                 "Proceeding without conjoined/fallback detection.",
-                verbose=verbose,
+                always_print=True,
             )
             secondary_boxes = torch.tensor([])
             secondary_sources = []

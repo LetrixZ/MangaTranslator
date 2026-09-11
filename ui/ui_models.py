@@ -87,6 +87,9 @@ class UITranslationLLMSettings:
     ero_doujinshi_mode: bool = False
     ocr_correction: bool = False
     force_cache_translations: bool = False
+    use_json_schema: bool = (
+        False  # OpenAI-Compatible only: constrain output to a JSON schema
+    )
     ocr_method: str = "LLM"  # "LLM", "manga-ocr", or "paddleocr-vl-1.6"
 
 
@@ -297,6 +300,7 @@ class UIConfigState:
             "ero_doujinshi_mode": self.llm_settings.ero_doujinshi_mode,
             "ocr_correction": self.llm_settings.ocr_correction,
             "force_cache_translations": self.llm_settings.force_cache_translations,
+            "use_json_schema": self.llm_settings.use_json_schema,
             "overlap_llm_with_inpaint": self.general.overlap_llm_with_inpaint,
             "font_pack": self.font_pack,
             "max_font_size": self.rendering.max_font_size,
@@ -658,6 +662,12 @@ class UIConfigState:
                         defaults.get("force_cache_translations", False),
                     )
                 ),
+                use_json_schema=bool(
+                    data.get(
+                        "use_json_schema",
+                        defaults.get("use_json_schema", False),
+                    )
+                ),
             ),
             rendering=UIRenderingSettings(
                 max_font_size=data.get("max_font_size", defaults["max_font_size"]),
@@ -896,6 +906,7 @@ def map_ui_to_backend_config(
         ),
         ocr_correction=ui_state.llm_settings.ocr_correction,
         force_cache_translations=ui_state.llm_settings.force_cache_translations,
+        use_json_schema=ui_state.llm_settings.use_json_schema,
         reasoning_effort=ui_state.general.reasoning_effort,
         effort=ui_state.general.effort,
         verbosity=ui_state.general.verbosity,

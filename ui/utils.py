@@ -841,7 +841,7 @@ def get_reasoning_effort_config(
             return True, ["high", "medium", "low", "none"], "high"
         if is_openai_compatible_reasoning_model(model_name):
             return True, ["high", "medium", "low", "none"], "high"
-        return False, [], None
+        return True, ["high", "medium", "low", "none"], "none"
 
     return False, [], None
 

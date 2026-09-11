@@ -246,6 +246,7 @@ DEFAULT_SETTINGS = {
     "special_instructions": "",
     "ero_doujinshi_mode": False,
     "ocr_correction": False,
+    "use_json_schema": False,
     "force_cache_translations": False,
     "overlap_llm_with_inpaint": False,
     "upscale_method": "model_lite",  # "model", "model_lite", "lanczos", or "none"
@@ -362,6 +363,7 @@ CANONICAL_CONFIG_KEY_ORDER: list[str] = [
     "ero_doujinshi_mode",
     "batch_ero_doujinshi_mode",
     "ocr_correction",
+    "use_json_schema",
     "force_cache_translations",
     "overlap_llm_with_inpaint",
     "batch_overlap_llm_with_inpaint",

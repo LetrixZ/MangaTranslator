@@ -793,6 +793,30 @@ def create_layout(
                                 ),
                                 elem_id="config_force_cache_translations",
                             )
+                            use_json_schema = gr.Checkbox(
+                                label="Structured JSON Output (faster)",
+                                value=bool(
+                                    saved_settings.get(
+                                        "use_json_schema",
+                                        settings_manager.DEFAULT_SETTINGS.get(
+                                            "use_json_schema", False
+                                        ),
+                                    )
+                                ),
+                                info=(
+                                    "OpenAI-Compatible (llama.cpp) only: enforce the exact translation/OCR "
+                                    "JSON with a GBNF grammar, use compact prompts, and disable model reasoning. "
+                                    "Requires 'two-step' mode (LLM OCR step is included when OCR Method is set to LLM)."
+                                ),
+                                elem_id="config_use_json_schema",
+                                visible=saved_settings.get(
+                                    "translation_mode",
+                                    settings_manager.DEFAULT_SETTINGS[
+                                        "translation_mode"
+                                    ],
+                                )
+                                == "two-step",
+                            )
 
                             gr.Markdown("### LLM Settings")
                             available_providers = utils.get_available_providers(
@@ -2436,6 +2460,7 @@ def create_layout(
             ocr_method_radio,
             ocr_correction,
             force_cache_translations,
+            use_json_schema,
             max_font_size,
             min_font_size,
             line_spacing_mult,
@@ -2580,6 +2605,7 @@ def create_layout(
             ocr_method_radio,
             ocr_correction,
             force_cache_translations,
+            use_json_schema,
             max_font_size,
             min_font_size,
             line_spacing_mult,
@@ -2726,6 +2752,7 @@ def create_layout(
             ocr_method_radio,
             ocr_correction,
             force_cache_translations,
+            use_json_schema,
             input_language,
             output_language,
             font_dropdown,
@@ -2872,6 +2899,7 @@ def create_layout(
             ocr_method_radio,
             ocr_correction,
             force_cache_translations,
+            use_json_schema,
             input_language,
             output_language,
             font_dropdown,
@@ -3632,7 +3660,7 @@ def create_layout(
         config_translation_mode.change(
             fn=callbacks.handle_translation_mode_change,
             inputs=[config_translation_mode, ocr_method_radio],
-            outputs=[ocr_method_radio, ocr_correction],
+            outputs=[ocr_method_radio, ocr_correction, use_json_schema],
             queue=False,
         )
 

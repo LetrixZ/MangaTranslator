@@ -13,6 +13,50 @@ from utils.model_metadata import (
 )
 
 
+def _format_complete_prompt_for_log(
+    messages: list[dict[str, Any]],
+) -> str:
+    """Format the assembled request messages as a readable 'complete prompt' log.
+
+    Image parts are summarized (MIME type + size) rather than dumped as base64 so
+    the log stays readable, while system/user text is shown in full.
+    """
+    blocks = []
+    for message in messages:
+        role = message.get("role", "")
+        content = message.get("content")
+        if isinstance(content, str):
+            blocks.append(f"[{role}]\n{content}")
+        elif isinstance(content, list):
+            content_lines = []
+            for item in content:
+                item_type = item.get("type")
+                if item_type == "text":
+                    content_lines.append(item.get("text", ""))
+                elif item_type == "image_url":
+                    image_url = item.get("image_url", {})
+                    url = image_url.get("url", "")
+                    detail = image_url.get("detail")
+                    detail_note = f", detail={detail}" if detail else ""
+                    if url.startswith("data:image"):
+                        mime_type = url.split(";", 1)[0].split(":", 1)[1]
+                        data_len = (
+                            len(url.split(",", 1)[1]) if "," in url else 0
+                        )
+                        content_lines.append(
+                            f"[IMAGE: {mime_type}, ~{data_len} base64 chars"
+                            f"{detail_note}]"
+                        )
+                    else:
+                        content_lines.append(
+                            f"[IMAGE_URL: {url[:120]}{detail_note}]"
+                        )
+                else:
+                    content_lines.append(f"[{item_type}]: {item}")
+            blocks.append(f"[{role}]\n" + "\n".join(content_lines))
+    return "\n\n".join(blocks)
+
+
 def build_openai_compatible_url(base_url: str, model_name: str | None = None) -> str:
     """Builds the full chat completions URL for generic or Azure OpenAI endpoints."""
     if not base_url:
@@ -82,6 +126,8 @@ def call_openai_compatible_endpoint(
     timeout: int = 480,
     max_retries: int = 5,
     base_delay: float = 1.0,
+    json_schema: dict[str, Any] | None = None,
+    grammar: str | None = None,
 ) -> str | None:
     """
     Calls a generic or Azure OpenAI-Compatible Chat Completions API endpoint and handles retries.
@@ -99,6 +145,14 @@ def call_openai_compatible_endpoint(
         timeout (int): Request timeout in seconds.
         max_retries (int): Maximum number of retries for rate limiting errors.
         base_delay (float): Initial delay for retries in seconds.
+        json_schema (Optional[Dict[str, Any]]): When provided without `grammar`, the server is asked to
+                                                constrain generation to this JSON schema via
+                                                response_format. Some llama.cpp servers ignore this and
+                                                only honor `grammar`; use `grammar` for those.
+        grammar (Optional[str]): GBNF grammar string. When provided, it is sent as the classic top-level
+                                 `grammar` parameter (supported by llama.cpp servers) and takes precedence
+                                 over `json_schema`. Structured mode also disables reasoning so thinking
+                                 tokens cannot burn the budget or pollute the response.
 
     Returns:
         Optional[str]: The raw text content from the API response if successful,
@@ -161,6 +215,22 @@ def call_openai_compatible_endpoint(
         "max_tokens": generation_config.get("max_tokens", 4096),
     }
 
+    if json_schema is not None and grammar is None:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "manga_translation",
+                "strict": True,
+                "schema": json_schema,
+            },
+        }
+
+    if json_schema is not None or grammar is not None:
+        if grammar is not None:
+            payload["grammar"] = grammar
+        if not metadata.get("is_anthropic_model", False):
+            payload["reasoning_effort"] = "none"
+
     is_openai_model = metadata.get("is_openai_model", False)
     is_anthropic_model = metadata.get("is_anthropic_model", False)
 
@@ -205,8 +275,18 @@ def call_openai_compatible_endpoint(
             reasoning_config["enabled"] = True
             reasoning_config["effort"] = reasoning_effort
         payload["reasoning"] = reasoning_config
-    elif reasoning_effort and reasoning_effort != "none":
-        payload["reasoning_effort"] = reasoning_effort
+    elif reasoning_effort:
+        # llama.cpp and other local OpenAI-compatible servers honor
+        # reasoning_effort == "none" to disable thinking, but OpenAI/Azure
+        # reject it as an invalid enum value so skip it for those targets.
+        if reasoning_effort == "none" and (
+            is_openai_model
+            or is_anthropic_model
+            or metadata.get("is_azure", False)
+        ):
+            pass
+        else:
+            payload["reasoning_effort"] = reasoning_effort
 
     supports_verbosity = metadata.get("supports_verbosity", False) or metadata.get(
         "is_gpt5_model", False
@@ -220,6 +300,12 @@ def call_openai_compatible_endpoint(
         payload["effort"] = effort
 
     payload = {k: v for k, v in payload.items() if v is not None}
+
+    log_message(
+        f"Complete prompt sent to {url} (model: {model_name}):\n---\n"
+        f"{_format_complete_prompt_for_log(messages)}\n---",
+        verbose=debug
+    )
 
     for attempt in range(max_retries + 1):
         current_delay = min(base_delay * (2**attempt), 16.0)
@@ -243,19 +329,61 @@ def call_openai_compatible_endpoint(
                     finish_reason = choice.get("finish_reason")
 
                     message = choice.get("message")
-                    if message and "content" in message:
-                        content = message["content"]
-                        return content.strip() if content else ""
-                    else:
+                    if not message:
                         log_message(
-                            f"No message content in response. Finish reason: {finish_reason}",
+                            f"No message object in response. Finish reason: {finish_reason}",
                             always_print=True,
                         )
                         log_message(
                             f"Full response: {json.dumps(result, indent=2)}",
-                            verbose=debug,
+                            always_print=True,
                         )
                         return ""
+
+                    content = message.get("content")
+
+                    # Some servers return content as a list of typed parts
+                    # (OpenAI Responses style). Extract the text parts.
+                    if isinstance(content, list):
+                        text_parts = [
+                            part.get("text", "")
+                            for part in content
+                            if isinstance(part, dict) and part.get("type") == "text"
+                        ]
+                        joined = "".join(text_parts).strip()
+                        if joined:
+                            return joined
+                        content = ""
+
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+
+                    # Empty main content: try alternative fields before giving up.
+                    # Some servers/models (e.g. reasoning models on llama.cpp/llama-
+                    # server) return the answer in these fields instead of 'content'.
+                    alt_text = ""
+                    alt_key = None
+                    for key in ("reasoning_content", "thinking", "thought", "reasoning"):
+                        alt = message.get(key)
+                        if isinstance(alt, str) and alt.strip():
+                            alt_text = alt.strip()
+                            alt_key = key
+                            break
+
+                    if alt_key is not None:
+                        log_message(
+                            f"Main message content is empty (finish reason: {finish_reason}); "
+                            f"falling back to the '{alt_key}' field as the response.",
+                            always_print=True,
+                        )
+                        return alt_text
+
+                    log_message(
+                        f"Empty message content in response (finish reason: {finish_reason}). "
+                        f"Full response:\n{json.dumps(result, indent=2)}",
+                        always_print=True,
+                    )
+                    return ""
                 else:
                     log_message(
                         "No choices in OpenAI-Compatible response", always_print=True

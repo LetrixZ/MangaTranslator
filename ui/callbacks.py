@@ -134,6 +134,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         ocr_method_val,
         ocr_correction_val,
         force_cache_translations_val,
+        use_json_schema_val,
         input_language,
         output_language,
         font_dropdown,
@@ -376,6 +377,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             ero_doujinshi_mode=bool(final_ero_doujinshi_mode),
             ocr_correction=bool(ocr_correction_val),
             force_cache_translations=bool(force_cache_translations_val),
+            use_json_schema=bool(use_json_schema_val),
         ),
         rendering=UIRenderingSettings(
             max_font_size=max_font_size,
@@ -600,6 +602,7 @@ def _format_single_success_message(
             f"• Target Language: {backend_config.translation.output_language}\n",
             f"• Reading Direction: {backend_config.translation.reading_direction.upper()}\n",
             f"• Translation Mode: {backend_config.translation.translation_mode}\n",
+            f"• OCR Method: {backend_config.translation.ocr_method}\n",
         ]
     )
 
@@ -775,6 +778,7 @@ def _format_batch_success_message(
             f"• Target Language: {backend_config.translation.output_language}\n",
             f"• Reading Direction: {backend_config.translation.reading_direction.upper()}\n",
             f"• Translation Mode: {backend_config.translation.translation_mode}\n",
+            f"• OCR Method: {backend_config.translation.ocr_method}\n",
         ]
     )
 
@@ -1134,6 +1138,7 @@ def handle_save_config_click(*args: Any) -> str:
         ocr_method_val,
         ocr_correction_val,
         force_cache_translations_val,
+        use_json_schema_val,
         max_fs,
         min_fs,
         ls,
@@ -1362,6 +1367,7 @@ def handle_save_config_click(*args: Any) -> str:
             ero_doujinshi_mode=bool(ero_doujinshi_mode_val),
             ocr_correction=bool(ocr_correction_val),
             force_cache_translations=bool(force_cache_translations_val),
+            use_json_schema=bool(use_json_schema_val),
         ),
         rendering=UIRenderingSettings(
             max_font_size=max_fs,
@@ -2638,4 +2644,5 @@ def handle_translation_mode_change(translation_mode: str, current_ocr_method: st
         ocr_update = gr.update(interactive=True)
 
     ocr_correction_update = gr.update(visible=is_two_step)
-    return ocr_update, ocr_correction_update
+    use_json_schema_update = gr.update(visible=is_two_step)
+    return ocr_update, ocr_correction_update, use_json_schema_update

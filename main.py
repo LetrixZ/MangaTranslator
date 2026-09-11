@@ -637,6 +637,11 @@ def main():
         help="When using two-step translation mode, instruct the LLM to contextually correct poor OCR during translation.",
     )
     parser.add_argument(
+        "--use-json-schema",
+        action="store_true",
+        help="OpenAI-Compatible only: constrain the translation output to a JSON schema via response_format and use a compact prompt. Reduced token usage.",
+    )
+    parser.add_argument(
         "--force-cache-translations",
         action="store_true",
         help="Explicitly save and reuse translations from cache, even for non-deterministic sampling.",
@@ -1334,6 +1339,7 @@ def main():
             ero_doujinshi_mode=args.ero_doujinshi_mode,
             ocr_correction=args.ocr_correction,
             force_cache_translations=args.force_cache_translations,
+            use_json_schema=args.use_json_schema,
             ocr_method=args.ocr_method,
         ),
         rendering=RenderingConfig(

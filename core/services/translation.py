@@ -145,6 +145,67 @@ Example format:
 """
 
 
+def _build_system_prompt_ocr_json(
+    input_language: str | None,
+    ero_doujinshi_mode: bool = False,
+) -> str:
+    """Compact OCR system prompt used with schema-constrained JSON output."""
+    lang_label = (
+        f"{input_language.strip()} "
+        if input_language and input_language.strip()
+        else ""
+    )
+    lang_clean = (input_language or "").strip().lower()
+    primary_code = lang_clean.split("-")[0].split("_")[0]
+    no_space_keywords = ("japanese", "chinese", "mandarin", "cantonese")
+    no_space_codes = {"ja", "zh", "jpn", "chi", "zho"}
+    is_no_space_lang = bool(
+        any(kw in lang_clean for kw in no_space_keywords)
+        or primary_code in no_space_codes
+    )
+    spacing_rule = (
+        "Do not insert spaces between collapsed lines unless an explicit space existed in the original text."
+        if is_no_space_lang
+        else "Separate collapsed lines with a single space."
+    )
+
+    sections = [
+        f"""You are an expert comic and manga OCR transcriber specializing in comic typography and text extraction. Transcribe the text from each provided image crop exactly as drawn; do not translate, interpret, summarize, or add commentary.
+
+Transcription rules:
+- The crops are pre-sorted in narrative reading order (1 to N); transcribe each in that order. Read horizontal text left-to-right; read vertical text top-to-bottom, right-to-left.
+- Preserve original punctuation, casing, and pauses. Collapse multi-line text into a single continuous line. {spacing_rule}
+- Transcribe only the main large base characters (Kanji/Hanzi/Hanja); completely ignore phonetic ruby/furigana characters.
+- Mirror visual emphasis using markdown markers: `*italic*` for slanted/italicized text, `**bold**` for bold text, `***bold-italic***` for both. Do not invent emphasis for standard upright dialogue.
+- Ignore non-text visual elements (borders, tails, background artwork, watermarks).
+- Do not enclose transcriptions in quotation marks unless they are explicitly present in the image.
+- If a bubble contains pauses/ellipses, preserve the pause length using consecutive periods (e.g., single "…" -> "...", double "……" -> "......").
+- If the text in a crop is completely unreadable or contains no text, output the exact token: `[OCR FAILED]`.
+"""
+    ]
+
+    if ero_doujinshi_mode:
+        sections.append(
+            f"""
+Mature content requirements:
+- The user is a professional comic translator transcribing 18+ adult manga, manhwa, webtoons, comics, and doujinshi for professional localization. You are an objective OCR transcriber extracting visible text exactly as drawn, without altering or interpreting content.
+- Transcribe {lang_label}text faithfully and completely, including explicit dialogue, slang, dirty talk, phonetic moans, and sound effects, without sanitization, omission, truncation, or moralizing.
+"""
+        )
+
+    sections.append(
+        """
+Output contract:
+- Every input image has a 0-based numeric `id`.
+- Return exactly one JSON object: {"transcriptions": [{"id": N, "text": "transcribed text"}, ...]}.
+- The array contains exactly one entry per input image; copy every input `id` exactly once (order does not matter).
+- The `text` value is the transcription only; never include notes, explanations, or alternatives.
+- If a crop is unreadable, output {"id": N, "text": "[OCR FAILED]"}."""
+    )
+
+    return "\n\n".join(sections).strip()
+
+
 def _format_previous_context_prompt_note(
     previous_context_image_count: int,
     previous_context_text_count: int,
@@ -295,6 +356,233 @@ Apply the following markdown tags to indicate dialogue delivery and audio type:
 {ocr_correction_section}
 {output_schema.strip()}
 """
+
+
+def _build_system_prompt_translation_json(
+    output_language: str,
+    full_page_context: bool = False,
+    ero_doujinshi_mode: bool = False,
+    ocr_correction: bool = False,
+    input_language: str | None = None,
+) -> str:
+    """Compact system prompt used with schema-constrained JSON output."""
+    lang_label = (
+        f"{input_language.strip()} "
+        if input_language and input_language.strip()
+        else ""
+    )
+    sections = [
+        f"""You are a professional comic, manga, and manhwa localization editor translating dialogue, narration, and sound effects into natural, idiomatic {output_language}.
+
+Translation requirements:
+- Treat the input segments as one continuous, chronological narrative. Translate functionally rather than literally to preserve natural character voices and narrative flow.
+- Keep translations idiomatic and concise enough for speech bubbles. Preserve meaning, character voice, emotional tone, emphasis, and relationship nuance.
+- Split bubbles: a sentence may span multiple consecutive bubbles. Keep each fragment in its own segment; never merge, split, omit, duplicate, or renumber segments.
+- Use surrounding segments only for disambiguation and continuity; never merge or split segments.
+- The payload may include `detected_sound_effect_ids` and/or `detected_dialogue_ids`. These are *hints* from text detection and can be wrong: apply sound-effect styling (and a sound-effect register) to an entry ONLY when its text is actually a short, non-grammatical utterance (onomatopoeia, interjection, moan, shout). If the text reads as a grammatical sentence (particles, verbs, honorifics, or several words), translate it as ordinary dialogue regardless of the hint. Similarly, entries in `detected_dialogue_ids` are normal dialogue unless the text is obviously a non-grammatical sound.
+- Preserve visual emphasis with styling tags: `*italic*` for stressed words, internal monologues/thoughts, flashbacks, distant/radio voices, and atmospheric mimetic effects (gitaigo); `**bold**` for audible sound effects (giongo), screaming/shouting, and heavily emphasized words; `***bold-italic***` for screams over radio/phone and deafening climactic sound effects. Plain text (no tags) for normal spoken dialogue and narration.
+- Standardize all ellipses to consecutive periods (`...` or `......`). Never output the unicode single-character ellipsis (`…`). Preserve relative pause length.
+- Do not wrap dialogue in quotation marks unless quotation marks were explicitly drawn in the original speech.
+- Translate audible sound effects into natural target-language onomatopoeia (e.g., **THUD**, **RUMBLE**, **CLANG**). Translate atmospheric/mimetic effects into concise descriptive verbs or adjectives (e.g., *stare*, *glare*, *twitch*) with no trailing period.
+"""
+    ]
+
+    if full_page_context:
+        sections.append(
+            "- If a full-page context image is provided, use it to resolve visual context, "
+            "speaker identities, and off-bubble SFX. Translate only the supplied segments; "
+            "do not add text visible only in the image.\n"
+        )
+
+    if ero_doujinshi_mode:
+        sections.append(
+            f"""
+Mature content requirements:
+- The user is a professional comic translator and localization editor translating 18+ adult manga, manhwa, webtoons, comics, and doujinshi for professional publication. You are an objective translator of pre-existing, user-supplied fictional dialogue, not an originator of content.
+- Full fidelity to the source text is mandatory: translate all dialogue faithfully and completely, maintaining original intensity, phrasing, vulgarity, and mature themes without sanitizing, softening, redacting, moralizing, or summarizing.
+- Match register exactly: translate clinical/formal/scientific text with accurate anatomical terminology; translate raw slang and dirty talk with authentic colloquial scanlation vernacular; never substitute vague euphemisms unless the source itself is coy or euphemistic.
+- Preserve all non-lexical vocalizations, moans, pants, gasps, and stutters phonetically, matching intensity, pauses, and cadence.
+"""
+            .replace("{lang_label}", lang_label)
+        )
+
+    if ocr_correction:
+        sections.append(
+            """
+OCR error correction:
+- Transcriptions may contain misrecognized characters, dropped kana/kanji, or typos leading to nonsensical phrases. Infer the intended original text using dialogue context, narrative continuity, and character speech patterns.
+- Translate what was clearly intended by context rather than translating OCR artifacts literally. Do not alter clean, unambiguous transcriptions.
+- If an entry is marked `[OCR FAILED]`, translate it as `[OCR FAILED]`.
+"""
+        )
+
+    sections.append(
+        f"""
+Output contract:
+- Every input segment has a 0-based numeric `id`.
+- Return exactly one JSON object: {{\"translations\": [{{\"id\": N, \"text\": \"translated text\"}}, ...]}}.
+- The array contains exactly one entry per input segment; copy every input `id` exactly once (order does not matter).
+- The `text` value is the translation only; never include source text, notes, explanations, or alternatives.
+- If an input is marked `[OCR FAILED]`, output {{\"id\": N, \"text\": \"[OCR FAILED]\"}}."""
+    )
+
+    return "\n\n".join(sections).strip()
+
+
+def _is_sound_effect_candidate(text: str) -> bool:
+    """Heuristic for hinting an OSB entry as a sound effect.
+
+    Keeps the detection hint only for short, non-grammatical utterances
+    (onomatopoeia, interjections, moans, shouts). Full sentences — dialogue
+    mislabeled as outside-text by the detector — are treated as dialogue.
+    """
+    stripped = (text or "").strip()
+    if not stripped or stripped == "[OCR FAILED]":
+        return False
+    # Japanese kana/kanji are one token each; dialogue sentences are long.
+    return len(stripped) <= 8
+
+
+def _build_json_array_gbnf(total_elements: int, array_key: str) -> str:
+    """GBNF grammar pinning output to `{{\"{array_key}\":[{{\"id\":i,\"text\":\"...\"}}, ...]}}`.
+
+    Some llama.cpp servers ignore `response_format`/json_schema and only honor
+    the classic top-level `grammar` field (verified against the project's
+    server). This grammar pins the output to exactly one `{{\"id\":i,\"text\":\"...\"}}`
+    object per segment, in id order, with no extra text anywhere, so the model
+    physically cannot ramble. The client parser reorders by id afterwards.
+    """
+    count = max(total_elements, 1)
+    items = " ws \",\" ws ".join(f"item{i}" for i in range(count))
+    item_rules = []
+    for i in range(count):
+        item_rules.append(
+            f'item{i} ::= "{{" ws "\\\"id\\\"" ws ":" ws "\\\"{i}\\\"" ws "," ws '
+            f'"\\\"text\\\"" ws ":" ws string ws "}}"'
+        )
+    grammar = [
+        'root ::= "{" ws "\\"'
+        + array_key
+        + '\\"" ws ":" ws "[" ws '
+        + items
+        + ' ws "]" ws "}"',
+        *item_rules,
+        'string ::= "\\\"" ([^"\\\\] | "\\\\" ["\\\\/bfnrt] | "\\\\u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])* "\\\""',
+        'ws ::= [ \t\n]?',
+    ]
+    return "\n".join(grammar)
+
+
+def _build_translation_gbnf(total_elements: int) -> str:
+    """GBNF grammar for the two-step translation output."""
+    return _build_json_array_gbnf(total_elements, "translations")
+
+
+def _build_ocr_gbnf(total_elements: int) -> str:
+    """GBNF grammar for the LLM-OCR output."""
+    return _build_json_array_gbnf(total_elements, "transcriptions")
+
+
+def _build_translation_json_schema(total_elements: int) -> dict[str, Any]:
+    """JSON schema enforcing the exact two-step translation output shape.
+    
+    llama.cpp servers compile this into a GBNF grammar, so the model cannot emit text outside the schema.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "translations": {
+                "type": "array",
+                "minItems": total_elements,
+                "maxItems": total_elements,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": max(total_elements - 1, 0),
+                            "description": "The 0-based ID copied from the corresponding input segment.",
+                        },
+                        "text": {
+                            "type": "string",
+                            "description": "The translation of the input segment with this ID.",
+                        },
+                    },
+                    "required": ["id", "text"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["translations"],
+        "additionalProperties": False,
+    }
+
+
+def _parse_json_schema_response(
+    response_text: str | None,
+    total_elements: int,
+    provider: str,
+    debug: bool = False,
+    key: str = "translations",
+) -> list[str]:
+    """Parse a schema-constrained JSON response.
+
+    Maps `{key}[].id` (0-based) back to slot positions, mirroring the
+    numbered-list parser's tolerance for missing/duplicate/out-of-range ids.
+    Falls back to the numbered-list parser if the model ignored the schema.
+    """
+    if response_text is None:
+        log_message(f"API call failed: {provider} returned None", always_print=True)
+        raise TranslationError(f"{provider}: API failed (returned None)")
+    if response_text == "":
+        log_message(f"API call returned empty response: {provider}", always_print=True)
+        raise TranslationError(f"{provider}: Empty response")
+
+    log_message(
+        f"Parsing {provider} JSON-schema response ({key}): {len(response_text)} chars",
+        verbose=debug,
+    )
+    log_message(f"Raw response:\n---\n{response_text}\n---", always_print=True)
+
+    try:
+        parsed = json.loads(response_text)
+        items = parsed.get(key)
+        if not isinstance(items, list):
+            raise ValueError(f"missing '{key}' array")
+
+        result: list[str | None] = [None] * total_elements
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                item_id = int(item.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= item_id < total_elements and result[item_id] is None:
+                result[item_id] = str(item.get("text", "")).strip()
+
+        final_list: list[str] = []
+        for i in range(total_elements):
+            if result[i] is None:
+                final_list.append(f"[{provider}: Missing item {i + 1}]")
+            else:
+                final_list.append(result[i])
+
+        log_message(
+            f"Parsed {sum(1 for r in result if r is not None)} items from JSON "
+            f"(expected {total_elements})",
+            verbose=debug,
+        )
+        return final_list
+    except (json.JSONDecodeError, ValueError, TypeError):
+        log_message(
+            "JSON-schema response invalid, falling back to numbered-list parser",
+            verbose=debug,
+        )
+        return _parse_llm_response_unified(
+            response_text, total_elements, provider, debug
+        )
 
 
 def _is_reasoning_model_google(model_name: str) -> bool:
@@ -911,11 +1199,7 @@ def _build_generation_config(
             **anthropic_flags,
         }
 
-        if (
-            is_openai_reasoning
-            or is_anthropic_reasoning
-            or is_openai_compatible_reasoning_model(model_name)
-        ) and config.reasoning_effort:
+        if config.reasoning_effort:
             effort = config.reasoning_effort
             if is_gpt6_model and effort in ("none", "minimal"):
                 effort = "low"
@@ -940,8 +1224,16 @@ def _call_llm_endpoint(
     debug: bool = False,
     system_prompt: str | None = None,
     prompt_cache_key: str | None = None,
+    json_schema: dict[str, Any] | None = None,
+    max_tokens_override: int | None = None,
+    grammar: str | None = None,
 ) -> str | None:
-    """Internal helper to dispatch API calls based on provider."""
+    """Internal helper to dispatch API calls based on provider.
+
+    `json_schema`/`grammar` (OpenAI-Compatible only) constrain generation to
+    the exact translation JSON shape; `max_tokens_override` caps the output
+    budget. Both are ignored by providers without native schema support.
+    """
     provider = config.provider
     model_name = config.model_name
     api_parts = parts + [{"text": prompt_text}]
@@ -1161,6 +1453,13 @@ def _call_llm_endpoint(
             generation_config = _build_generation_config(
                 provider, model_name, config, debug
             )
+            if json_schema is not None or grammar is not None:
+                generation_config["json_schema"] = json_schema
+                if max_tokens_override is not None:
+                    generation_config["max_tokens"] = min(
+                        generation_config.get("max_tokens", 4096),
+                        max_tokens_override,
+                    )
             return call_openai_compatible_endpoint(
                 base_url=base_url,
                 api_key=api_key,
@@ -1169,6 +1468,8 @@ def _call_llm_endpoint(
                 generation_config=generation_config,
                 system_prompt=system_prompt,
                 debug=debug,
+                json_schema=json_schema,
+                grammar=grammar,
             )
         else:
             raise TranslationError(
@@ -1685,10 +1986,32 @@ def _perform_llm_ocr(
             )
         ocr_parts.append(bubble_part)
 
-    ocr_system = _build_system_prompt_ocr(
-        input_language,
-        ero_doujinshi_mode=getattr(config, "ero_doujinshi_mode", False),
+    use_json_schema = bool(getattr(config, "use_json_schema", False)) and (
+        provider == "OpenAI-Compatible"
     )
+    if use_json_schema:
+        log_message(
+            "Using schema-constrained JSON OCR output (OpenAI-Compatible)",
+            always_print=True,
+        )
+        ocr_system = _build_system_prompt_ocr_json(
+            input_language,
+            ero_doujinshi_mode=getattr(config, "ero_doujinshi_mode", False),
+        )
+        ocr_grammar = _build_ocr_gbnf(total_elements)
+        ocr_schema_max_tokens = max(1000, 200 + 60 * total_elements)
+        ocr_max_tokens_override = (
+            min(ocr_schema_max_tokens, config.max_tokens)
+            if config.max_tokens is not None
+            else ocr_schema_max_tokens
+        )
+    else:
+        ocr_system = _build_system_prompt_ocr(
+            input_language,
+            ero_doujinshi_mode=getattr(config, "ero_doujinshi_mode", False),
+        )
+        ocr_grammar = None
+        ocr_max_tokens_override = None
     ocr_response_text = _call_llm_endpoint(
         config,
         ocr_parts,
@@ -1696,13 +2019,24 @@ def _perform_llm_ocr(
         debug,
         system_prompt=ocr_system,
         prompt_cache_key=prompt_cache_key,
+        grammar=ocr_grammar,
+        max_tokens_override=ocr_max_tokens_override,
     )
-    extracted_texts = _parse_llm_response_unified(
-        ocr_response_text,
-        total_elements,
-        provider + "-OCR",
-        debug,
-    )
+    if use_json_schema:
+        extracted_texts = _parse_json_schema_response(
+            ocr_response_text,
+            total_elements,
+            provider + "-OCR",
+            debug,
+            key="transcriptions",
+        )
+    else:
+        extracted_texts = _parse_llm_response_unified(
+            ocr_response_text,
+            total_elements,
+            provider + "-OCR",
+            debug,
+        )
 
     if extracted_texts is None:
         log_message("OCR API call failed", always_print=True)
@@ -1868,7 +2202,16 @@ def call_translation_api_batch(
 
     try:
         if translation_mode == "two-step":
-            ocr_prompt = f"""
+            use_json_schema_mode = bool(getattr(config, "use_json_schema", False)) and (
+                provider == "OpenAI-Compatible"
+            )
+            if use_json_schema_mode:
+                ocr_prompt = (
+                    f"{total_elements} text images from a manga page, in narrative reading order. "
+                    "Transcribe the text in each image."
+                )
+            else:
+                ocr_prompt = f"""
 ## CONTEXT
 You have been provided with {total_elements} individual text images from a manga page.
 
@@ -1984,7 +2327,68 @@ The target language is {output_language}. Use the appropriate translation approa
 
             use_rosetta = is_rosetta_model(model_name)
             use_hy_mt2 = is_hy_mt2_model(model_name)
-            if use_rosetta:
+            use_json_schema = bool(getattr(config, "use_json_schema", False)) and (
+                provider == "OpenAI-Compatible"
+            )
+            if use_json_schema:
+                log_message(
+                    "Using schema-constrained JSON translation output (OpenAI-Compatible)",
+                    always_print=True,
+                )
+                translation_system = _build_system_prompt_translation_json(
+                    output_language,
+                    full_page_context=(
+                        config.send_full_page_context and bool(full_image_b64)
+                    ),
+                    ero_doujinshi_mode=getattr(config, "ero_doujinshi_mode", False),
+                    ocr_correction=getattr(config, "ocr_correction", False),
+                    input_language=input_language,
+                )
+                json_payload: dict[str, Any] = {
+                    "source_language": input_language or None,
+                    "target_language": output_language,
+                    "segments": [
+                        {"id": i, "text": formatted_texts[i]}
+                        for i in range(total_elements)
+                    ],
+                }
+                # OSB detection is noisy: only hint entries that actually look like
+                # short non-grammatical sound effects, so full sentences are not
+                # force-translated as SFX even when the detector mislabels them.
+                true_sound_effect_ids = (
+                    [
+                        i - 1
+                        for i in osb_indices
+                        if _is_sound_effect_candidate(formatted_texts[i - 1])
+                    ]
+                    if osb_indices and len(osb_indices) < total_elements
+                    else []
+                )
+                if true_sound_effect_ids:
+                    json_payload["detected_sound_effect_ids"] = true_sound_effect_ids
+                if dialogue_indices and len(dialogue_indices) < total_elements:
+                    json_payload["detected_dialogue_ids"] = [
+                        i - 1 for i in dialogue_indices
+                    ]
+                if cleaned_previous_texts:
+                    json_payload["previous_page_context"] = cleaned_previous_texts
+                if (
+                    config.special_instructions
+                    and config.special_instructions.strip()
+                ):
+                    json_payload["instructions"] = config.special_instructions.strip()
+                translation_prompt = json.dumps(json_payload, ensure_ascii=False)
+                translation_schema = _build_translation_json_schema(total_elements)
+                translation_grammar = _build_translation_gbnf(total_elements)
+                # The grammar makes the model stop at the closing brace, so this cap is
+                # only runaway insurance: it costs nothing when generation ends early.
+                schema_max_tokens = max(1000, 200 + 60 * total_elements)
+                max_tokens_override = (
+                    min(schema_max_tokens, config.max_tokens)
+                    if config.max_tokens is not None
+                    else schema_max_tokens
+                )
+            elif use_rosetta:
                 log_message(
                     "YanoljaNEXT Rosetta model detected — using Rosetta prompt format",
                     always_print=True,
@@ -2025,8 +2429,20 @@ The target language is {output_language}. Use the appropriate translation approa
                 debug,
                 system_prompt=translation_system,
                 prompt_cache_key=session_prompt_cache_key,
+                json_schema=translation_schema if use_json_schema else None,
+                max_tokens_override=(
+                    max_tokens_override if use_json_schema else None
+                ),
+                grammar=translation_grammar if use_json_schema else None,
             )
-            if use_rosetta or use_hy_mt2:
+            if use_json_schema:
+                final_translations = _parse_json_schema_response(
+                    translation_response_text,
+                    total_elements,
+                    provider + "-Translate",
+                    debug,
+                )
+            elif use_rosetta or use_hy_mt2:
                 final_translations = _parse_rosetta_response(
                     translation_response_text,
                     total_elements,
@@ -2193,6 +2609,8 @@ def prepare_bubble_images_for_translation(
 
     prepared_bubbles = []
 
+    img_h, img_w = original_cv_image.shape[:2]
+
     mask_lookup = {}
     for b in bubble_data:
         b_bbox = tuple(round(v) for v in b["bbox"])
@@ -2221,7 +2639,7 @@ def prepare_bubble_images_for_translation(
 
     for bubble in bubble_data:
         prepared_bubble = bubble.copy()
-        x1, y1, x2, y2 = bubble["bbox"]
+        x1, y1, x2, y2 = (round(v) for v in bubble["bbox"])
 
         # Use the tight bbox of the mask
         _mask = bubble.get("sam_mask")
@@ -2239,6 +2657,25 @@ def prepare_bubble_images_for_translation(
                     y1 = min(y1, my1)
                     x2 = max(x2, mx2)
                     y2 = max(y2, my2)
+
+        # Clamp the crop region to the page bounds. Detector boxes (notably
+        # RT-DETR conjoined children at image borders) can carry slightly
+        # out-of-range coords, and an unclipped negative start makes numpy
+        # return an empty crop that crashes cv2 conversions downstream.
+        x1 = max(0, min(int(x1), img_w))
+        y1 = max(0, min(int(y1), img_h))
+        x2 = max(0, min(int(x2), img_w))
+        y2 = max(0, min(int(y2), img_h))
+        if x2 <= x1 or y2 <= y1:
+            log_message(
+                f"Skipping degenerate bubble {bubble['bbox']} "
+                f"(empty crop after clamping to {img_w}x{img_h})",
+                always_print=True,
+            )
+            prepared_bubble["image_b64"] = None
+            prepared_bubble["mime_type"] = None
+            prepared_bubbles.append(prepared_bubble)
+            continue
 
         bubble_image_cv = original_cv_image[y1:y2, x1:x2].copy()
 
